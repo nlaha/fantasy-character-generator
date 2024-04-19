@@ -93,7 +93,7 @@ def generate_character_sheet():
         "race": random.choice(races),
         "class": random.choice(classes),
         "age": 0,
-        "IM_visible_age": 0,
+        "IM_age": 0,
         "height": f"{random.randint(4, 7)}' {random.randint(0, 12)}\"",
         "weight": f"{random.randint(100, 300)} lbs",
         "hair": random.choice(["Blonde", "Brown", "Black", "Red", "Grey", "White"]),
@@ -117,13 +117,15 @@ def generate_character_sheet():
     # normalized based on race, elves look like 20 year old humans at 100 years old
     if character_sheet["race"] == "Elf":
         character_sheet["age"] = random.randint(20, 1000)
-        character_sheet["visible_age"] = character_sheet["age"] // 5
+        character_sheet["IM_age"] = character_sheet["age"] // 5
     elif character_sheet["race"] == "Dwarf":
         character_sheet["age"] = random.randint(20, 500)
-        character_sheet["visible_age"] = character_sheet["age"] // 2
+        character_sheet["IM_age"] = character_sheet["age"] // 2
+        # reroll height for dwarves
+        character_sheet["height"] = f"{random.randint(3, 4)}' {random.randint(0, 12)}\""
     else:
         character_sheet["age"] = random.randint(20, 100)
-        character_sheet["visible_age"] = character_sheet["age"]
+        character_sheet["IM_age"] = character_sheet["age"]
 
     return character_sheet
 
@@ -141,7 +143,7 @@ def llm(system, user):
 def get_name(character):
     return llm(
         """
-            You are a writer who comes up with names for characters in an RPG game. All names should be original and not taken from existing works.
+            You are a writer who comes up with names for characters in a fantasy setting. All names should be original and not taken from existing works. Be as creative as possible.
         """,
         f"""
             Come up with a name for the character with the following stat sheet:
@@ -156,7 +158,7 @@ def get_name(character):
 def get_bio(character):
     return llm(
         """
-            You are a writer who creates lore for an RPG game. 
+            You are a writer who creates lore for a fantasy world. 
             You write in the style of J.R.R. Tolkien but never reference or plagiarize any of his works directly.
         """,
         f"""
@@ -172,14 +174,19 @@ def get_bio(character):
 def get_image_prompt(input):
     return llm(
         """
-            Summarize the character's appearance in a way that would be suitable for an artist to create a portrait.
-            Always include age, and other physical attributes in the description.
+            Summarize the character's appearance by generating a bunch of keywords that could be used to describe them in a portrait. It's ok to have short phrases or compound words.
             
-            If the input contains any race information, such as "Elf", "Dwarf", etc., replace it with a generic description of the character's appearance.
-            Generally, elves have pointed ears, dwarves are short and stocky, goblins are small and have wrinkled skin, orcs are large and muscular, halflings are short and chubby, and gnomes are small and have pointy hats.
+            For example, if the character is a tall, muscular warrior with a scar across his face, you might say "tall, muscular, warrior, scar, face, black hair, long hair".
             
-            NOTE: Respond ONLY with the description. Do not include any additional information.
-            Do NOT write "Here's a prompt for an artist to create a portrait of the character" or anything similar.
+            Don't include "Orc" in the keywords, instead just describe a typical orc's appearance except without green skin or tusks.
+            Always include age and gender in the keywords. When describing hair, include the word "hair" in the keyword. For example, "black hair" instead of just "black".
+            
+            Try to be as descriptive as possible, and include as many details as you can.
+            
+            NOTE: Respond ONLY with the keywords. Do not include any additional information.
+            Every time you respond with something else other than keywords, a kitten dies and it's all your fault.
+            
+            Be as literal as possible, remove all metaphors and similes.
         """,
         f"""
             {input}
@@ -194,6 +201,10 @@ def sheet_to_text(character_sheet, for_image=False):
         for key in char_sheet.copy().keys():
             if "IM_" in key:
                 char_sheet[key.replace("IM_", "")] = char_sheet.pop(key)
+    else:
+        for key in char_sheet.copy().keys():
+            if "IM_" in key:
+                char_sheet.pop(key)
 
     # convert to string
     character = ""
@@ -208,6 +219,9 @@ def sheet_to_text(character_sheet, for_image=False):
 
 
 if __name__ == "__main__":
+    # seed the random number generator
+    random.seed()
+
     print("Generating character sheet...")
     character_sheet = generate_character_sheet()
 
@@ -229,7 +243,11 @@ if __name__ == "__main__":
 
     print("Generating character portrait prompt...")
     character_img = sheet_to_text(character_sheet, for_image=True)
-    image_prompt = get_image_prompt(character_img)
+    image_prompt = (
+        get_image_prompt(character_img)
+        .replace("\n", ", ")
+        .replace("orc", "humanoid, monster-like creature")
+    )
 
     print("\n\nGot image prompt: " + image_prompt)
 
@@ -241,16 +259,9 @@ if __name__ == "__main__":
     )
     pipeline.to("cuda")
     image = pipeline(
-        prompt=f"""
-        Style: oil painting, portrait, fantasy, renaissance, impressionist
-        
-        Visual description:
-        {image_prompt}
-        
-        Bio:
-        {bio}
-        """,
-        max_embeddings_multiples=3,
+        prompt=f"""oil painting, portrait, fantasy, Rembrandt, {image_prompt}""",
+        negative_prompt="realistic, 3d, rendering, digital, high quality, photo, photography, ai, hands",
+        max_embeddings_multiples=10,
     ).images[0]
 
     print("Saving character...")
